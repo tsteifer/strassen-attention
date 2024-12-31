@@ -137,23 +137,6 @@ class PositionalEncoding1(nn.Module):
         x = x + self.pe[:,:x.size(1), :]
         return x#self.dropout(x)
 
-class PosEmbedRandom(nn.Module):
-
-    def __init__(self, d_model, max_len):
-        super().__init__()
-        sqn=int(np.sqrt(max_len))
-        pe = nn.Parameter(torch.randn(max_len,d_model)).unsqueeze(0).unsqueeze(0)
-        #self.peY = nn.Parameter(torch.randn(max_len,d_model))
-        self.register_buffer('pe', pe)
-
-    def forward(self, x):
-        # print(x.size())
-        #sqn=int(np.sqrt(x.size(1)))
-        #position = torch.tensor(np.indices((sqn,sqn)))
-        #position = position.view((2,sqn**2))
-        x[:,:,1:] = x[:,:,1:] + self.pe[1:x.size(1)]#.unsqueeze(0)
-        return x#self.dropout(x)
-
 
 class PosEmbed2D(nn.Module):
 
@@ -178,47 +161,6 @@ class PosEmbed2D(nn.Module):
         x[:,:,1::2] = x[:,:,1::2] + self.peY[position[1,:],:].unsqueeze(0)
         return x#self.dropout(x)
     
-class PosEmbed2Dsin0(nn.Module):
-
-    def __init__(self, d_model, max_len):
-        super().__init__()
-        sqn=int(np.sqrt(max_len))
-        self.peX = nn.Parameter(torch.randn(sqn,int(d_model/2)))
-        self.peY = nn.Parameter(torch.randn(sqn,int(d_model/2)))
-        #position = torch.tensor(np.indices((sqn,sqn)))
-        #position = position.view((2,sqn**2))
-        # print(self.peX.size())
-        # print(position.size())
-        #self.register_buffer('position',position)
-
-
-    def forward(self, x):
-        # print(x.size())
-        sqn=int(np.sqrt(x.size(1)))
-        position = torch.tensor(np.indices((sqn,sqn)))
-        position = position.view((2,sqn**2))
-        x[:,:,0::2] = x[:,:,0::2] + self.peX[position[0,:],:].unsqueeze(0)
-        x[:,:,1::2] = x[:,:,1::2] + self.peY[position[1,:],:].unsqueeze(0)
-        return x#self.dropout(x)
-
-class PosEmbed2D1Hot(nn.Module):
-
-    def __init__(self, d_model, max_len):
-        super().__init__()
-        sqn=int(np.sqrt(max_len))
-        pe=F.one_hot(torch.arange(0, sqn), num_classes=d_model)
-        #self.peY=F.one_hot(torch.arange(0, sqn), num_classes=d_model)
-        self.register_buffer('peX', pe)
-        self.register_buffer('peY', pe)
-
-    def forward(self, x):
-        # print(x.size())
-        sqn=int(np.sqrt(x.size(1)))
-        position = torch.tensor(np.indices((sqn,sqn)))
-        position = position.view((2,sqn**2))
-        x = x + self.peX[position[0,:],:].unsqueeze(0)
-        x = x + self.peY[position[1,:],:].unsqueeze(0)
-        return x#self.dropout(x)
 
 # LayerNorm
 class LayerNorm(nn.Module):
@@ -365,12 +307,12 @@ class TripletAttention(nn.Module):
         return x
     
 class TripleAttentionSmarterFull(nn.Module):
-    def __init__(self, model, dim, num_heads=1, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0., hadamard=True):
+    def __init__(self, model, dim, num_heads=1,):
         super().__init__()
         self.model = model
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim ** -0.5
+        self.scale = head_dim ** -0.5
         self.hadamard = hadamard
 
         # self.w = nn.Linear(dim, dim * 7, bias=qkv_bias)
@@ -382,7 +324,6 @@ class TripleAttentionSmarterFull(nn.Module):
     def forward(self, x, test=False):
         # B: batch size, N: number of tokens, C: channels
         B, N, C = x.shape
-        #print(x.shape)
         H = self.num_heads
         D = C // H
 
@@ -407,14 +348,12 @@ class TripleAttentionSmarterFull(nn.Module):
         Vj = v1.unsqueeze(-2)
         Vk = v2.unsqueeze(-3)
 
-        # Expand Vj and Vk to shape (B, H, N_J, N_K, D)
         V = Vj.expand(-1, -1, -1, N, -1)*Vk.expand(-1, -1, N, -1, -1)
 
         up=torch.einsum('bhijd,bhjkd->bhikd', torch.einsum('bhijd,bhjkd->bhikd', X, Y*V),Z)
         down=torch.einsum('bhijd,bhjkd->bhikd', torch.einsum('bhijd,bhjkd->bhikd', X, Y),Z)
        
         x=torch.einsum('bhiid->bhid', up)/torch.einsum('bhiid->bhid', down)
-        #x=x.transpose(2,-1)
         return x.reshape(B, N, C)
 
 class TripleAttentionSmarter(nn.Module):
@@ -423,9 +362,8 @@ class TripleAttentionSmarter(nn.Module):
         self.model = model
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim ** -0.5
+        self.scale = head_dim ** -0.5
         self.w = nn.Linear(dim, dim * 5, bias=qkv_bias)
-        #self.o = nn.Linear(dim,dim)
         self.attn_drop = nn.Dropout(0.0)
 
 
@@ -435,11 +373,8 @@ class TripleAttentionSmarter(nn.Module):
         #print(x.shape)
         H = self.num_heads
         D = C // H
-
-        # Calculate the A, B, C, D, E, F, V tensors
         w = self.w(x).reshape(B, N, 5, H, D).permute(2, 0, 3, 1, 4)
-        x=x.reshape(B,H,N,D)#.permute(2,0,3,1,4)
-        #a, b, c, v1, v2 = w[0], w[1], w[2], w[3], w[4]
+        x=x.reshape(B,H,N,D)=
         a, b, c, v1, v2 = w[0], w[1], w[2], w[3],w[4]
      
         X = (a @ b.transpose(-2, -1)) * self.scale
